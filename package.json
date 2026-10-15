@@ -1,0 +1,47 @@
+{
+  "name": "hk-access-nav-mobile",
+  "private": true,
+  "version": "0.1.0",
+  "main": "expo-router/entry",
+  "description": "iOS app helping visually impaired people navigate Hong Kong",
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "expo": "~57.0.28",
+    "expo-asset": "~57.0.19",
+    "expo-audio": "~57.0.5",
+    "expo-camera": "~57.0.6",
+    "expo-constants": "~57.0.21",
+    "expo-file-system": "~57.0.7",
+    "expo-haptics": "~57.0.3",
+    "expo-image-manipulator": "~57.0.21",
+    "expo-linear-gradient": "~57.0.2",
+    "expo-linking": "~57.0.12",
+    "expo-location": "~57.0.21",
+    "expo-router": "~57.0.26",
+    "expo-speech": "~57.0.3",
+    "expo-splash-screen": "~57.0.10",
+    "expo-status-bar": "~57.0.1",
+    "expo-system-ui": "~57.0.4",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-gesture-handler": "~2.32.0",
+    "react-native-reanimated": "4.5.1",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0",
+    "react-native-web": "~0.21.0",
+    "react-native-worklets": "0.10.1"
+  },
+  "devDependencies": {
+    "babel-preset-expo": "~57.0.15"
+  },
+  "scripts": {
+    "start": "expo start",
+    "ios": "expo start --ios",
+    "android": "expo start --android",
+    "web": "expo start --web",
+    "test": "node scripts/check-parser-parity.mjs && node tests/core.test.mjs && node tests/reply.test.mjs && node tests/simulate.test.mjs && node tests/cloud-health.test.mjs && node tests/locales.test.mjs && node tests/on-device-router.test.mjs && node tests/vision-policy.test.mjs",
+    "demo-frame": "node scripts/make-demo-frame.mjs",
+    "verify": "expo export --platform web --output-dir dist"
+  }
+}

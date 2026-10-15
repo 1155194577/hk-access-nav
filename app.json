@@ -1,0 +1,81 @@
+{
+  "expo": {
+    "name": "HK Access Nav",
+    "slug": "hk-access-nav",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "hkaccessnav",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.hkaccessnav.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "The camera describes your surroundings and detects obstacles on your path.",
+        "NSMicrophoneUsageDescription": "The microphone lets you speak where you want to go.",
+        "NSLocationWhenInUseUsageDescription": "Your location is used to route you safely and avoid stairs.",
+        "UIBackgroundModes": [],
+        "UIRequiredDeviceCapabilities": ["arm64"],
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true,
+          "NSExceptionDomains": {
+            "47.237.92.84": {
+              "NSExceptionAllowsInsecureHTTPLoads": true,
+              "NSIncludesSubdomains": true
+            }
+          }
+        }
+      }
+    },
+    "android": {
+      "package": "com.hkaccessnav.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#0B1220",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "permissions": ["CAMERA", "RECORD_AUDIO", "ACCESS_FINE_LOCATION"]
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "The camera describes your surroundings and detects obstacles on your path.",
+          "microphonePermission": "The microphone lets you speak where you want to go.",
+          "recordAudioAndroid": true
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "The microphone lets you speak where you want to go."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Your location is used to route you safely and avoid stairs."
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0B1220",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 76
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": false,
+      "reactCompiler": true
+    }
+  }
+}
