@@ -21,7 +21,10 @@ import packedTst from '../src/data/network/tst.js';
 import packedCsw from '../src/data/network/cheungShaWan.js';
 import NETWORK from '../src/data/network/index.js';
 import HAZARDS from '../src/data/network/hazards.js';
+import MTR_STATIONS from '../src/data/mtr-stations.js';
 import { decodeGraph } from '../src/core/graph-codec.js';
+// dependency-free, so unlike pedestrian-router.js it CAN be imported here
+import { MAX_DEST_SNAP_M } from '../src/core/snap-limits.js';
 
 // Bundles carry the PACKED format; decode before asserting on content.
 const central = decodeGraph(packedCentral);
@@ -317,4 +320,97 @@ test('some Central edges pass near a surveyed warning strip', () => {
   }
 
   assert.ok(matched > 20, `expected many edges near a warning strip, got ${matched}`);
+});
+
+// -------------------------------------------------- destination snap gate
+
+/**
+ * Regression coverage for the destination snap gate.
+ *
+ * The guard itself lives in `pedestrian-router.js` and cannot be called from
+ * here (see the note at the top of this file). So these tests pin the facts the
+ * guard depends on: which real destinations are reachable, and what the router
+ * did before the limit existed.
+ *
+ * The bug being covered: the origin snap was gated at MAX_SNAP_M but the
+ * destination snap never was. A destination the survey does not reach therefore
+ * produced a normal, successful-looking plan that terminated at the last mapped
+ * node — announcing arrival while the user was still hundreds of metres away.
+ *
+ * Reported from Fortune Estate (幸福邨, 22.33558, 114.15397) in Cheung Sha Wan.
+ */
+const FORTUNE_ESTATE = { latitude: 22.3355817, longitude: 114.1539651 };
+
+/** Snap distance for a station, from the origin graph. */
+function snapForStation(station) {
+  return nearestNode(csw.nodes, station).distance;
+}
+
+test('Fortune Estate snaps inside the limit, so routing is attempted', () => {
+  const start = nearestNode(csw.nodes, FORTUNE_ESTATE);
+  assert.ok(
+    start.distance <= MAX_DEST_SNAP_M,
+    `origin snapped ${start.distance.toFixed(0)} m, over the ${MAX_DEST_SNAP_M} m limit`
+  );
+});
+
+test('the two nearest stations are genuinely on the surveyed network', () => {
+  // Both of these end at the station, so a route to them is trustworthy.
+  for (const name of ['Cheung Sha Wan', 'Sham Shui Po']) {
+    const station = MTR_STATIONS.find((s) => s.en === name);
+    assert.ok(station, `no bundled station named ${name}`);
+    const snap = snapForStation(station);
+    assert.ok(
+      snap <= MAX_DEST_SNAP_M,
+      `${name} snapped ${snap.toFixed(0)} m; expected it to be reachable`
+    );
+  }
+});
+
+test('the gate has real work to do: several stations snap beyond the limit', () => {
+  // These sit inside the bounding box, so hasOfflineCoverage() says "covered",
+  // but the surveyed network does not actually reach them.
+  for (const name of ['Lai Chi Kok', 'Prince Edward']) {
+    const station = MTR_STATIONS.find((s) => s.en === name);
+    assert.ok(station, `no bundled station named ${name}`);
+    const snap = snapForStation(station);
+    assert.ok(
+      snap > MAX_DEST_SNAP_M,
+      `${name} snapped only ${snap.toFixed(0)} m; if the survey now covers it, ` +
+        'this expectation (and the gate rationale) needs revisiting'
+    );
+  }
+});
+
+test('without the gate a far destination still returns a route (the old bug)', () => {
+  const station = MTR_STATIONS.find((s) => s.en === 'Prince Edward');
+  const start = nearestNode(csw.nodes, FORTUNE_ESTATE);
+  const goal = nearestNode(csw.nodes, station);
+
+  // The gate rejects this destination...
+  assert.ok(
+    goal.distance > MAX_DEST_SNAP_M,
+    `expected a far snap, got ${goal.distance.toFixed(0)} m`
+  );
+
+  // ...yet a path to that far-off node is found, and carries a plausible
+  // distance. Nothing in the result would have revealed that it stops 700 m
+  // short. That silent success is what the guard exists to prevent.
+  const result = route(csw, start.index, goal.index, STEP_FREE);
+  assert.ok(result, 'expected a path to the nearest mapped node');
+
+  const metres = result.edgeIndices.reduce((s, i) => s + csw.edges[i].m, 0);
+  assert.ok(
+    metres > 500 && metres < 5000,
+    `expected a plausible-looking distance, got ${metres.toFixed(0)} m`
+  );
+
+  // The route ends at the mapped node, which is the snapped distance from the
+  // station: the user would have been told they arrived here.
+  const [lon, lat] = csw.nodes[goal.index];
+  const endsOff = haversine(lon, lat, station.longitude, station.latitude);
+  assert.ok(
+    endsOff > MAX_DEST_SNAP_M,
+    `expected the endpoint to be far from the station, got ${endsOff.toFixed(0)} m`
+  );
 });

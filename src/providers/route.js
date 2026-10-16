@@ -103,6 +103,7 @@ function normalise(plan) {
     tactileMetres: plan.tactileMetres,
     lifts: plan.lifts,
     snapMeters: plan.snapMeters,
+    destinationSnapMeters: plan.destinationSnapMeters,
     area: plan.area,
   };
 }
