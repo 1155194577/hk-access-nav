@@ -9,6 +9,7 @@
     "expo": "~57.0.30",
     "expo-asset": "~57.0.19",
     "expo-audio": "~57.0.5",
+    "expo-build-properties": "^58.0.10",
     "expo-camera": "~57.0.6",
     "expo-constants": "~57.0.21",
     "expo-dev-client": "~57.0.20",
@@ -44,5 +45,12 @@
     "test": "node scripts/check-parser-parity.mjs && node tests/core.test.mjs && node tests/reply.test.mjs && node tests/simulate.test.mjs && node tests/cloud-health.test.mjs && node tests/locales.test.mjs && node tests/on-device-router.test.mjs && node tests/vision-policy.test.mjs",
     "demo-frame": "node scripts/make-demo-frame.mjs",
     "verify": "expo export --platform web --output-dir dist"
+  },
+  "expo": {
+    "install": {
+      "exclude": [
+        "expo-build-properties"
+      ]
+    }
   }
 }
