@@ -43,6 +43,7 @@ import graphs from '../data/network/index';
 
 import { decodeGraph } from './graph-codec';
 import { HAZARD_PROXIMITY_M, hazardsFor } from './hazards-network';
+import { MAX_SNAP_M, MAX_DEST_SNAP_M } from './snap-limits';
 
 /**
  * Graph chunks, loaded lazily so a district's data is only parsed when it is
@@ -66,8 +67,12 @@ const MIN_BEARING_M = 15;
 /** A "turn around" needs this much distance behind it to be believable. */
 const MIN_UTURN_M = 30;
 
-/** Snapping further than this means the fix is bad, not the network. */
-const MAX_SNAP_M = 60;
+/**
+ * Snap limits live in their own dependency-free module so the test suite can
+ * assert against the same numbers. Re-exported here because this is where callers
+ * expect to find them.
+ */
+export { MAX_SNAP_M, MAX_DEST_SNAP_M };
 
 export const WALKING_SPEED_MPS = 1.2;
 
@@ -624,6 +629,23 @@ export function walkingRoute(origin, destination, options = {}) {
     );
   }
 
+  /**
+   * Gating the destination matters as much as gating the origin, and for a
+   * different reason: a far destination snap does not mean a bad fix, it means
+   * the survey stops short. Without this check `graph.route` happily returns a
+   * path to the last mapped node, and nothing downstream can tell that the user
+   * has been routed to somewhere other than where they asked to go.
+   */
+  const maxDestinationSnapM = options.maxDestinationSnapMeters ?? MAX_DEST_SNAP_M;
+  if (goal.distance > maxDestinationSnapM) {
+    throw new RoutingError(
+      `The nearest surveyed path to your destination is ${Math.round(goal.distance)} m away ` +
+        `(limit ${maxDestinationSnapM} m), so a route would stop short of it. ` +
+        `Try a destination nearer the surveyed network, or a different entrance.`,
+      { code: 'destination_off_network', retryable: false }
+    );
+  }
+
   const result = graph.route(start.index, goal.index, profile);
   if (!result) {
     /**
@@ -682,6 +704,13 @@ export function walkingRoute(origin, destination, options = {}) {
     avoidsStairs: profile.excludeStairs && !usedStairs,
     usedBarriers,
     snapMeters: Math.round(start.distance),
+    /**
+     * How far the destination had to move to reach the mapped network. Now that
+     * the caller is protected by the `destination_off_network` guard above, this
+     * is informational: a small value means the route really does end where the
+     * user asked, a larger one is worth warning about before the limit is hit.
+     */
+    destinationSnapMeters: Math.round(goal.distance),
     /** True when the route came from the surveyed network, not an estimate. */
     surveyed: true,
   };
