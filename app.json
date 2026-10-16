@@ -10,6 +10,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.hkaccessnav.app",
+      "appleTeamId": "CXULRZ6977",
       "infoPlist": {
         "NSCameraUsageDescription": "The camera describes your surroundings and detects obstacles on your path.",
         "NSMicrophoneUsageDescription": "The microphone lets you speak where you want to go.",
