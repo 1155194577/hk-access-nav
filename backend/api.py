@@ -3,38 +3,43 @@ Composition root for the HK Access Nav backend.
 
 Serve with:
 
+    python api.py                  # 0.0.0.0:8000
+    PORT=8080 python api.py
+    HOST=127.0.0.1 python api.py
+    RELOAD=1 python api.py         # auto-reload while editing
+
+or, equivalently:
+
     uvicorn api:app --host 0.0.0.0 --port 8000
 
-Currently this serves one service:
+This module is the HTTP layer and nothing else. Routing decisions live in
+`routing.RoutingService`; vision lives in `vlm.py`. Two rules keep that split
+honest:
 
-    vlm.py   SiliconFlow vision proxy  (defines its own FastAPI `app`)
+* `api.py` translates payload shapes and status codes. It must not compute
+  distances, bearings, or personas — that belongs to the service.
+* Everything a client sees is produced by the service (`RouteResult.to_dict`),
+  so there is one source of truth for the response body.
 
-and optionally a second, if `routing.py` is present beside this file:
+`routing.py` currently ships a **stub** service that returns straight-line
+estimates. Replace the class, not this file, when the surveyed router lands.
 
-    routing.py   tactile-aware pedestrian routing  (own FastAPI `app`)
+Three traps worth knowing:
 
-`vlm.py` builds its own `FastAPI` instance and keeps state on it, so it is mounted
-as a sub-app rather than merged. Three consequences drive the code below, and
-each one is a trap if you change it:
+1. `.env` is loaded BEFORE importing vlm, because `vlm.py` reads
+   `SILICONFLOW_API_KEY` at module import time, not per request. Changing `.env`
+   needs a process restart.
 
-1. `.env` MUST be loaded *before* importing the service. `vlm.py` reads
-   `SILICONFLOW_API_KEY` at module import time (line 67). Change `.env` and you
-   must restart the process, not just reload a module.
+2. `vlm.app` is mounted at `/` LAST. Its routes are already rooted at `/api/vlm`,
+   so mounting it anywhere else would double the prefix. Parent routes are
+   registered first so they win over the catch-all mount.
 
-2. Mounted sub-apps' lifespans DO NOT run. Starlette only runs the root app's
-   lifespan, and `vlm.py` holds a pooled httpx client that it closes in its own
-   lifespan. So that lifespan is driven explicitly against `vlm.app` here.
-
-3. Route order matters. Any parent routes (`/health`, and the routing adapter)
-   are registered before the mounts, and `vlm.app` is mounted at `/` LAST
-   because its paths are already rooted at `/api/vlm`.
+3. Mounted sub-apps do not run their own lifespan, and `vlm.py` closes its pooled
+   httpx client in one — so `vlm.lifespan(vlm.app)` is driven explicitly.
 
 Requires (there is no requirements.txt in this commit):
 
     fastapi  uvicorn[standard]  pydantic  httpx  python-dotenv  Pillow
-
-Pillow is needed by vlm.py for EXIF stripping and downscaling. numpy/pandas are
-NOT needed unless routing.py is added.
 """
 
 from contextlib import asynccontextmanager
@@ -46,16 +51,12 @@ from dotenv import load_dotenv
 # Must precede the imports below: vlm.py reads the environment at import time.
 load_dotenv()
 
-from fastapi import APIRouter, FastAPI, HTTPException  # noqa: E402
+from fastapi import FastAPI, HTTPException, Query, Request  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from pydantic import BaseModel, ConfigDict, Field, ValidationError  # noqa: E402
+from pydantic import BaseModel, ConfigDict, Field  # noqa: E402
 
 import vlm  # noqa: E402
-
-try:  # optional -- see the module docstring
-    import routing  # noqa: E402
-except ModuleNotFoundError:  # routing.py not in this deployment
-    routing = None
+from routing import RoutingError, RoutingService  # noqa: E402
 
 log = logging.getLogger("hknav.api")
 
@@ -63,23 +64,23 @@ DEFAULT_PERSONA = os.getenv("HKNAV_DEFAULT_PERSONA", "unfamiliar").strip()
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
-    """Drive each sub-app's lifespan against its own app object.
+async def lifespan(app: FastAPI):
+    """Build the routing service, keep it on app.state, tear it down on exit.
 
-    Mounted apps never get their own lifespan, and `vlm.py` closes its pooled
-    httpx provider in its lifespan — so it has to run. routing.py additionally
-    stores `idx` / `router` on `routing.app.state` and its endpoints read that
-    exact object, so passing the parent app here would leave every route 500.
+    The service is created here rather than at import time so a real router can
+    load its index once, at startup, instead of on first request. `python api.py`
+    and `uvicorn api:app` both go through this path.
     """
-    if routing is None:
-        async with vlm.lifespan(vlm.app):
-            log.info("vision ready (routing: absent)")
-            yield
-    else:
-        async with routing.lifespan(routing.app):
-            async with vlm.lifespan(vlm.app):
-                log.info("routing + vision ready")
-                yield
+    service = RoutingService()
+    service.startup()
+    app.state.router = service
+
+    async with vlm.lifespan(vlm.app):
+        log.info("routing (%s) + vision ready", getattr(service, "NAME", "?"))
+        yield
+
+    service.shutdown()
+    app.state.router = None
     log.info("shut down")
 
 
@@ -87,17 +88,18 @@ app = FastAPI(
     title="HK Access Nav — API",
     version="1.0",
     description=(
-        "Vision-only deployment.\n\n"
+        "* `POST /api/navigate/route` — the mobile app's routing endpoint\n"
+        "* `/api/navigate/{personas,health,nearby}` — routing detail\n"
         "* `/api/vlm`, `/api/vlm/health` — SiliconFlow vision proxy\n\n"
-        "Mount `routing.py` beside this file to also get `/api/navigate/*`, "
-        "including a mobile-compatible `POST /api/navigate/route`."
+        "Routing is currently served by a **stub** that returns straight-line "
+        "estimates. Every response says so in `disclaimer` and `router`."
     ),
     lifespan=lifespan,
 )
 
-# vlm.py installs CORS for its own routes. The parent needs its own only for
-# routes registered here, and for the routing mount if it is present. The native
-# Expo client sends no Origin, so this is a web-build concern.
+# vlm.py installs CORS for its own routes. The parent needs its own for the
+# /api/navigate routes. The native Expo client sends no Origin, so this matters
+# for the web build only.
 _origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
@@ -108,141 +110,133 @@ app.add_middleware(
 )
 
 
-# --------------------------------------------------------------------- /health
-@app.get("/health", tags=["ops"])
-def health() -> dict:
-    """Aggregate liveness — the endpoint to point a container probe at.
+def _service(request: Request) -> RoutingService:
+    service = getattr(request.app.state, "router", None)
+    if service is None:  # lifespan did not run, e.g. a bare app.state reset
+        raise HTTPException(503, "routing service is not ready")
+    return service
 
-    `/api/vlm/health` still gives the per-service detail (provider, models,
-    whether a key is configured).
+
+# ---------------------------------------------------------------- request shapes
+class _Point(BaseModel):
+    """A coordinate in any of the shapes clients actually send.
+
+    The Expo client tries `{lat,lng}` first and `{latitude,longitude}` second, so
+    both are accepted here rather than forcing an app-side change.
     """
-    status: dict = {"status": "ok", "vision": {"mounted": True}}
-    if routing is None:
-        status["routing"] = {"present": False}
-    else:
-        idx = getattr(routing.app.state, "idx", None)
-        router = getattr(routing.app.state, "router", None)
-        status["routing"] = {
-            "present": True,
-            "ready": idx is not None,
-            "edges": len(idx.e) if idx is not None else 0,
-            "router": type(router).__name__ if router is not None else None,
-        }
-    return status
+
+    lat: float | None = None
+    lng: float | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+
+    model_config = ConfigDict(extra="ignore")
+
+    def coords(self) -> tuple[float, float] | None:
+        la = self.lat if self.lat is not None else self.latitude
+        lo = self.lng if self.lng is not None else self.longitude
+        if la is None or lo is None:
+            return None
+        return float(la), float(lo)
 
 
-# --------------------------------------------------- mobile-compatible adapter
-# Only meaningful with routing.py; registered before the mount so it wins over
-# routing's native handler for this exact path.
-if routing is not None:
+class RouteRequest(BaseModel):
+    """Accepts both payload shapes the mobile client attempts."""
 
-    class _Point(BaseModel):
-        """A coordinate in any of the shapes clients actually send.
+    origin: _Point | None = None
+    destination: _Point | None = None
+    from_: _Point | None = Field(default=None, alias="from")
+    to: _Point | None = None
 
-        The Expo client tries `{lat,lng}` first and `{latitude,longitude}`
-        second, so both are accepted rather than forcing an app-side change.
-        """
+    persona: str | None = None
+    language: str | None = None
 
-        lat: float | None = None
-        lng: float | None = None
-        latitude: float | None = None
-        longitude: float | None = None
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
-        model_config = ConfigDict(extra="ignore")
 
-        def coords(self) -> tuple[float, float] | None:
-            la = self.lat if self.lat is not None else self.latitude
-            lo = self.lng if self.lng is not None else self.longitude
-            if la is None or lo is None:
-                return None
-            return float(la), float(lo)
+# ---------------------------------------------------------------------- /health
+@app.get("/health", tags=["ops"])
+def health(request: Request) -> dict:
+    """Aggregate liveness — point a container probe here."""
+    service = getattr(request.app.state, "router", None)
+    return {
+        "status": "ok",
+        "routing": service.health() if service is not None else {"ready": False},
+        "vision": {"mounted": True},
+    }
 
-    class MobileRouteRequest(BaseModel):
-        origin: _Point | None = None
-        destination: _Point | None = None
-        from_: _Point | None = Field(default=None, alias="from")
-        to: _Point | None = None
-        persona: str | None = None
-        language: str | None = None
 
-        model_config = ConfigDict(populate_by_name=True, extra="ignore")
+# --------------------------------------------------------------------- navigate
+@app.post("/api/navigate/route", tags=["navigate"])
+def navigate_route(req: RouteRequest, request: Request) -> dict:
+    """Route in the shape the mobile app expects.
 
-    navigate = APIRouter(tags=["navigate"])
+    `src/providers/route.js` reads `data.instructions` (a list of strings) and
+    `data.distance_meters`. Everything else in the response is extra detail the
+    native client uses.
+    """
+    origin = req.origin or req.from_
+    dest = req.destination or req.to
+    if origin is None or dest is None:
+        raise HTTPException(422, "origin and destination are both required")
 
-    @navigate.post("/api/navigate/route")
-    def mobile_route(req: MobileRouteRequest) -> dict:
-        """Route in the shape the mobile app expects.
+    o = origin.coords()
+    d = dest.coords()
+    if o is None or d is None:
+        raise HTTPException(422, "each point needs lat/lng or latitude/longitude")
 
-        `src/providers/route.js` reads `data.instructions` (a list of strings)
-        and `data.distance_meters`. The native guidance document uses
-        `events[].say` and `distance_m` instead, so this translates rather than
-        duplicating logic — every native field is still returned alongside.
-        """
-        origin = req.origin or req.from_
-        dest = req.destination or req.to
-        if origin is None or dest is None:
-            raise HTTPException(422, "origin and destination are both required")
-        o = origin.coords()
-        d = dest.coords()
-        if o is None or d is None:
-            raise HTTPException(422, "each point needs lat/lng or latitude/longitude")
+    language = (req.language or "yue").strip()
 
-        (from_lat, from_lon) = o
-        (to_lat, to_lon) = d
+    try:
+        result = _service(request).route(
+            o,
+            d,
+            persona=req.persona or DEFAULT_PERSONA,
+            language=language,
+        )
+    except RoutingError as exc:
+        # The service owns the semantics; this only maps them onto HTTP.
+        raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)})
 
-        try:
-            native_req = routing.RouteRequest(
-                from_lat=from_lat,
-                from_lon=from_lon,
-                to_lat=to_lat,
-                to_lon=to_lon,
-                persona=req.persona or DEFAULT_PERSONA,
-            )
-        except ValidationError as exc:
-            # RouteRequest bounds-checks against Hong Kong; surface as 422 rather
-            # than letting pydantic's error become a 500.
-            detail = exc.errors()[0]
-            raise HTTPException(422, f"point outside the covered area: {detail['msg']}")
+    return result.to_dict(language)
 
-        plan = routing.route(native_req)  # HTTPException for no-route / bad persona
-        events = plan.get("events") or []
-        instructions = [e["say"] for e in events if e.get("say")]
 
-        return {
-            # --- what the mobile app consumes ---
-            "instructions": instructions,
-            "distance_meters": plan.get("distance_m"),
-            # --- native guidance document, unchanged ---
-            "distance_m": plan.get("distance_m"),
-            "duration_s": plan.get("duration_s"),
-            "route_id": plan.get("route_id"),
-            "persona": plan.get("persona"),
-            "router": plan.get("router"),
-            "accessibility_optimised": plan.get("accessibility_optimised"),
-            "revision": plan.get("revision"),
-            "polyline": plan.get("polyline"),
-            "events": events,
-            "accessibility": plan.get("accessibility"),
-            "source": "hk-nav-server",
-        }
+@app.get("/api/navigate/personas", tags=["navigate"])
+def navigate_personas(request: Request) -> dict:
+    return _service(request).personas()
 
-    app.include_router(navigate)
+
+@app.get("/api/navigate/health", tags=["navigate"])
+def navigate_health(request: Request) -> dict:
+    return _service(request).health()
+
+
+@app.get("/api/navigate/nearby", tags=["navigate"])
+def navigate_nearby(
+    request: Request,
+    lat: float = Query(..., ge=22.13, le=22.57, description="WGS84 latitude"),
+    lon: float = Query(..., ge=113.83, le=114.51, description="WGS84 longitude"),
+    radius: float = Query(25.0, gt=0, le=200, description="search radius, metres"),
+    limit: int = Query(10, gt=0, le=50),
+) -> dict:
+    try:
+        return _service(request).nearby(lat, lon, radius_m=radius, limit=limit)
+    except RoutingError as exc:
+        raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)})
 
 
 # --------------------------------------------------------------- sub-app mounts
-# Order matters: routing (if present) first, the catch-all vision mount last.
-if routing is not None:
-    app.mount("/api/navigate", routing.app)
+# Last, and at "/" — vlm.py's routes are already rooted at /api/vlm.
 app.mount("/", vlm.app)
 
 
 # ------------------------------------------------------------------ entrypoint
-# `python api.py` starts the server. No uvicorn command line, no extra flags.
+# `python api.py` starts the server. No uvicorn command line needed.
 #
-# uvicorn is handed the app OBJECT rather than the "api:app" import string, so
-# running this file as a script does not import api.py a second time under a
-# different module name. The reloader is the one exception — it needs an import
-# string — so RELOAD=1 switches to that mode.
+# uvicorn gets the app OBJECT, not the "api:app" import string, so running this
+# file as a script does not import api.py a second time under a different module
+# name. The reloader is the one exception — it needs an import string — so
+# RELOAD=1 switches to that mode.
 if __name__ == "__main__":
     import uvicorn
 
@@ -256,11 +250,8 @@ if __name__ == "__main__":
     # flush=True so the banner is not buried behind uvicorn's stderr logs when
     # stdout is piped (systemd, docker logs, `| tee`).
     print(f"HK Access Nav API  ->  http://{host}:{port}", flush=True)
+    print("  navigate : /api/navigate/route  (stub router: straight-line estimates)", flush=True)
     print("  vision   : /api/vlm  (docs at /api/vlm/docs)", flush=True)
-    print(
-        f"  routing  : {'/api/navigate/*' if routing is not None else 'not present (vision only)'}",
-        flush=True,
-    )
 
     if reload_enabled:
         uvicorn.run("api:app", host=host, port=port, reload=True)
