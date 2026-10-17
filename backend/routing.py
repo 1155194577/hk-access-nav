@@ -145,6 +145,31 @@ _TURN_ONTO_NOW = {
     "uturn": {"yue": "掉頭入{street}。", "en": "Turn around onto {street}."},
 }
 _ARRIVE = {"yue": "已經到達。", "en": "You have arrived."}
+# --- crossings --------------------------------------------------------------
+# The index carries no crossing type (edges_enriched.csv has the columns, but they
+# are empty for all 1.4M rows), so build_crossings.py derives one per edge from
+# the CSDI feature_type and ships it as a sidecar. Announcing the KIND of crossing
+# is the point: "signalised" tells a blind pedestrian there is a button and a wait,
+# "cautionary" tells them there is neither.
+_CROSS_LABEL = {
+    1: {"yue": "交通燈過路處", "en": "signalised crossing"},
+    2: {"yue": "斑馬線", "en": "zebra crossing"},
+    3: {"yue": "冇燈號過路處", "en": "cautionary crossing"},
+    4: {"yue": "行人過路處", "en": "crossing"},
+}
+_CROSS_ON = {
+    "yue": "喺{street}嘅{kind}過馬路。",
+    "en": "Cross at the {kind} on {street}.",
+}
+# "喺前面嘅{kind}" produced a triple 嘅 with the old labels; a separate phrasing
+# for the unnamed case is both shorter and easier to hear.
+_CROSS_BARE = {
+    "yue": "前面有{kind}，過馬路。",
+    "en": "There is a {kind} ahead — cross there.",
+}
+#: Two crossing runs closer than this are one junction, announced once.
+CROSS_MERGE_M = 20.0
+
 _STAIRS_WARN = {"yue": "注意：呢條路線有樓梯。", "en": "Note: this route includes stairs."}
 _NO_TACTILE = {
     "yue": "呢條路線冇觸覺引路徑資料。",
@@ -356,6 +381,19 @@ class GraphRouter:
                     self.names_tc = nz["tc"].tolist()
             except Exception:                          # noqa: BLE001
                 self.name_idx = None
+
+        # Crossing type sidecar. Optional, like names: without it instructions
+        # simply never mention crossings.
+        self.cross = None
+        cross_path = Path(path).with_name("crossings.npz")
+        if cross_path.exists():
+            try:
+                cz = np.load(cross_path, allow_pickle=False)
+                c = cz["cross"]
+                if len(c) == self.n_edges:
+                    self.cross = c
+            except Exception:                          # noqa: BLE001
+                self.cross = None
 
     # ------------------------------------------------------------------ snapping
     def nearest_node(self, latitude: float, longitude: float) -> tuple[int, float]:
@@ -681,11 +719,45 @@ class GraphRouter:
             if nm:
                 last_name = nm
 
+        # ---- crossings
+        # A crossing is worth its own step: "signalised" means press and wait,
+        # "cautionary" means there is no signal at all. Group consecutive edges
+        # carrying the same type so one road crossing is announced once.
+        if self.cross is not None:
+            n_e = len(edge_path)
+            i = 0
+            while i < n_e:
+                code = int(self.cross[edge_path[i]])
+                if code == 0:
+                    i += 1
+                    continue
+                j = i
+                while j < n_e and int(self.cross[edge_path[j]]) == code:
+                    j += 1
+                if steps and steps[-1].get("type") == "crossing" and \
+                        cum[i] - steps[-1]["at_m"] < CROSS_MERGE_M:
+                    i = j
+                    continue          # same junction, already announced
+                nm = self._dominant_name(edge_path, i, j, lang)
+                kind = _CROSS_LABEL.get(code, _CROSS_LABEL[4]).get(lang, "crossing")
+                say = (_CROSS_ON[lang].format(street=nm, kind=kind) if nm
+                       else _CROSS_BARE[lang].format(kind=kind))
+                steps.append({"at_m": round(cum[i], 1), "type": "crossing",
+                              "say": say, "street": nm, "crossing": code})
+                i = j
+
         if used_stairs:
             steps.append({"at_m": 0.0, "type": "warning", "say": _STAIRS_WARN[lang]})
         if tactile_m == 0:
             steps.append({"at_m": 0.0, "type": "warning", "say": _NO_TACTILE[lang]})
         steps.append({"at_m": round(total_m, 1), "type": "arrive", "say": _ARRIVE[lang]})
+
+        # Crossings are inserted by edge position, so re-order by distance.
+        def _rank(st):
+            t = st.get("type")
+            return 0 if t == "depart" else (9 if t == "arrive" else (8 if t == "warning" else 1))
+
+        steps.sort(key=lambda st: (st["at_m"], _rank(st)))
         return steps
 
 

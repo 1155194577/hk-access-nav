@@ -161,3 +161,38 @@ joins), not a wider radius.
 CSDI-added edge. A global pass would also merge OSM's own 4,909 components, and
 many of those gaps are real — two footway ends either side of a road with no
 crossing there. That belongs to the pipeline that owns OSM, not to this tool.
+
+## crossings.npz
+
+One byte per edge: `0` none, `1` signalised, `2` zebra, `3` cautionary, `4` other.
+39 KB, optional at load time like `names.npz`.
+
+`edges_enriched.csv` *has* `crossing_type` and `signal` columns, but they are
+**empty for all 1,412,717 rows** — the OSM-side extraction never populated them.
+The app's offline router still speaks crossings because its graph is CSDI-derived,
+where `feature_type` encodes the kind directly (30 signalised, 31 zebra,
+32 cautionary, 33 other, 25,821 crossing features in total).
+
+So `backend/build_crossings.py` matches CSDI crossing geometry onto the index and
+writes the sidecar:
+
+```
+python3 backend/build_crossings.py \
+    --index backend/data/index/nearby.npz \
+    --out   backend/data/index/crossings.npz
+```
+
+Gate: `d_max 3 m`, `theta_max 45°` (a crossing is laid *across* the footway, so the
+bearing requirement must be wide), and **edges longer than 25 m are skipped** —
+otherwise the approach footway gets labelled as the crossing itself. At 6 m the
+labelling covered 11.7% of edges, which was clearly too many; at 3 m + the length
+filter it is **6.5%** (46,319 edges: 17,489 signalised, 536 zebra, 19,524
+cautionary, 8,770 other).
+
+`routing.py` announces a crossing only when the traversed edge carries a code, and
+merges two runs closer than 20 m into one instruction, so a junction is described
+once rather than twice.
+
+Why it matters: "signalised" tells a blind pedestrian there is a button and a wait;
+"cautionary" tells them there is neither. That is the information the offline
+router already gave and the server did not.
