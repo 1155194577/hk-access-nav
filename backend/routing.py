@@ -122,6 +122,28 @@ _TURN_NOW = {
     "slight_right": {"yue": "微微轉右。", "en": "Bear right."},
     "uturn": {"yue": "掉頭。", "en": "Turn around."},
 }
+# --- street-name variants ---------------------------------------------------
+# The index carries no street names; build_names.py derives them into names.npz.
+# Coverage is partial (most footways are unnamed in OSM), so instructions MIX the
+# two forms: a name where one exists, a distance where none does.
+_DEPART_ON = {
+    "yue": "由{street}開始行，向{bearing}度方向行{distance}。",
+    "en": "Start on {street}, walking {bearing} degrees for {distance}.",
+}
+_TURN_ONTO = {
+    "left": {"yue": "轉左入{street}，跟住行{distance}。", "en": "Turn left onto {street}, then continue {distance}."},
+    "right": {"yue": "轉右入{street}，跟住行{distance}。", "en": "Turn right onto {street}, then continue {distance}."},
+    "slight_left": {"yue": "微微轉左入{street}，跟住行{distance}。", "en": "Bear left onto {street}, then continue {distance}."},
+    "slight_right": {"yue": "微微轉右入{street}，跟住行{distance}。", "en": "Bear right onto {street}, then continue {distance}."},
+    "uturn": {"yue": "掉頭入{street}，跟住行{distance}。", "en": "Turn around onto {street}, then continue {distance}."},
+}
+_TURN_ONTO_NOW = {
+    "left": {"yue": "轉左入{street}。", "en": "Turn left onto {street}."},
+    "right": {"yue": "轉右入{street}。", "en": "Turn right onto {street}."},
+    "slight_left": {"yue": "微微轉左入{street}。", "en": "Bear left onto {street}."},
+    "slight_right": {"yue": "微微轉右入{street}。", "en": "Bear right onto {street}."},
+    "uturn": {"yue": "掉頭入{street}。", "en": "Turn around onto {street}."},
+}
 _ARRIVE = {"yue": "已經到達。", "en": "You have arrived."}
 _STAIRS_WARN = {"yue": "注意：呢條路線有樓梯。", "en": "Note: this route includes stairs."}
 _NO_TACTILE = {
@@ -293,6 +315,25 @@ class GraphRouter:
 
         # ~0.4 s at startup; saves every "disconnected" false negative.
         self._label_components()
+
+        # Street names live in a sidecar, not in the index: nearby.npz has none,
+        # and the CSV that could supply them is 250 MB. Optional by design — a
+        # missing or stale sidecar degrades to distance-only instructions rather
+        # than stopping the service.
+        self.name_idx = None
+        self.names_en: list[str] = []
+        self.names_tc: list[str] = []
+        names_path = Path(path).with_name("names.npz")
+        if names_path.exists():
+            try:
+                nz = np.load(names_path, allow_pickle=False)
+                idx = nz["name_idx"]
+                if len(idx) == self.n_edges:
+                    self.name_idx = idx
+                    self.names_en = nz["en"].tolist()
+                    self.names_tc = nz["tc"].tolist()
+            except Exception:                          # noqa: BLE001
+                self.name_idx = None
 
     # ------------------------------------------------------------------ snapping
     def nearest_node(self, latitude: float, longitude: float) -> tuple[int, float]:
@@ -491,16 +532,56 @@ class GraphRouter:
             }},
         )
 
+    # ------------------------------------------------------------------- names
+    def edge_name(self, edge_i: int, lang: str) -> str | None:
+        """Street name for one edge, or None. Falls back to the other language."""
+        if self.name_idx is None:
+            return None
+        k = int(self.name_idx[edge_i])
+        if k < 0:
+            return None
+        primary = self.names_tc if lang == "yue" else self.names_en
+        secondary = self.names_en if lang == "yue" else self.names_tc
+        if k < len(primary) and primary[k]:
+            return primary[k]
+        if k < len(secondary) and secondary[k]:
+            return secondary[k]
+        return None
+
+    def _dominant_name(self, edge_path, lo: int, hi: int, lang: str) -> str | None:
+        """Most common name across one segment's edges.
+
+        Not the first edge: segments usually begin on an unnamed connector (a
+        crossing, a kerb ramp), so keying off the first edge would leave most
+        segments anonymous even when the street they run along is named.
+        """
+        counts: dict[str, int] = {}
+        for ei in edge_path[lo:hi]:
+            nm = self.edge_name(ei, lang)
+            if nm:
+                counts[nm] = counts.get(nm, 0) + 1
+        if not counts:
+            return None
+        return max(counts.items(), key=lambda kv: kv[1])[0]
+
     # ------------------------------------------------------------- instructions
     def _instructions(self, node_path, edge_path, total_m, lang, used_stairs, tactile_m):
-        """Turn-by-turn derived from edge bearings. No street names: none exist.
+        """Turn-by-turn, mixing street names with distances.
 
-        Distances are SEGMENT lengths — how far to go before the *next* change —
-        not the distance remaining. Saying "turn right, then continue 198 m" when
-        198 m is what is left of a 236 m route would be actively misleading.
+        Three rules, each learned from a specific failure:
 
-        Consecutive turns of the same kind are merged: a route that bears right
-        five times over 40 m is one instruction, not five.
+        1. Distances are SEGMENT lengths — how far to go before the *next*
+           change — not the distance remaining. Saying "turn right, then
+           continue 198 m" on a 236 m route reads as if 198 m were the next leg.
+
+        2. A street name is announced only when it CHANGES. Repeating "onto
+           Nathan Road" at every bend of the same road is noise.
+
+        3. The name comes from the dominant edge of the segment, not the first:
+           segments usually start on an unnamed crossing or kerb ramp.
+
+        Where an edge has no name — 78% of the network, because most Hong Kong
+        footways are unnamed in OSM — the instruction falls back to a distance.
         """
         pts = [(self.node_lat[n], self.node_lon[n]) for n in node_path]
         bearings = [bearing_deg(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1])
@@ -511,37 +592,67 @@ class GraphRouter:
         for ei in edge_path:
             cum.append(cum[-1] + float(self.edge_len[ei]))
 
-        turns: list[tuple[float, str]] = []
+        # turns as (at_m, word, edge_index) so segments can be sliced per name
+        raw: list[tuple[float, str, int]] = []
         for i in range(1, len(bearings)):
             delta = ((bearings[i] - bearings[i - 1] + 540.0) % 360.0) - 180.0
             word = _turn_word(delta)
             if word is None:
                 continue
-            if turns and turns[-1][1] == word:
+            if raw and raw[-1][1] == word:
                 continue                       # still the same bend
-            turns.append((cum[i], word))
+            raw.append((cum[i], word, i))
+
+        # A 3 m "bear right" is the graph's segment granularity, not an
+        # instruction a person can act on.
+        turns: list[tuple[float, str, int]] = []
+        for idx, (at_m, word, ei) in enumerate(raw):
+            nxt = raw[idx + 1][0] if idx + 1 < len(raw) else total_m
+            if (nxt - at_m) < 5.0 and word.startswith("slight"):
+                continue
+            turns.append((at_m, word, ei))
 
         steps: list[dict[str, Any]] = []
 
+        # ---- departure
+        first_end = turns[0][2] if turns else len(edge_path)
+        first_name = self._dominant_name(edge_path, 0, first_end, lang)
         first_seg = turns[0][0] if turns else total_m
-        steps.append({
-            "at_m": 0.0,
-            "type": "depart",
-            "say": _DEPART[lang].format(
+        if first_name:
+            say = _DEPART_ON[lang].format(
+                street=first_name,
                 bearing=int(round(bearings[0])),
-                distance=_format_distance(first_seg, lang)),
-        })
+                distance=_format_distance(first_seg, lang))
+        else:
+            say = _DEPART[lang].format(
+                bearing=int(round(bearings[0])),
+                distance=_format_distance(first_seg, lang))
+        steps.append({"at_m": 0.0, "type": "depart", "say": say,
+                      "street": first_name, "named": bool(first_name)})
 
-        for idx, (at_m, word) in enumerate(turns):
+        # ---- turns
+        last_name = first_name
+        for idx, (at_m, word, ei) in enumerate(turns):
             nxt = turns[idx + 1][0] if idx + 1 < len(turns) else total_m
+            seg_end = turns[idx + 1][2] if idx + 1 < len(turns) else len(edge_path)
             segment = max(nxt - at_m, 0.0)
-            # A 3 m "bear right" is the graph's segment granularity, not an
-            # instruction a person can act on. Drop it rather than recite it.
-            if segment < 5.0 and word.startswith("slight"):
-                continue
-            say = (_TURN[word][lang].format(distance=_format_distance(segment, lang))
-                   if segment >= 10.0 else _TURN_NOW[word][lang])
-            steps.append({"at_m": round(at_m, 1), "type": word, "say": say})
+
+            nm = self._dominant_name(edge_path, ei, seg_end, lang)
+            changed = nm if (nm and nm != last_name) else None
+
+            if changed:
+                tmpl = (_TURN_ONTO[word][lang] if segment >= 10.0
+                        else _TURN_ONTO_NOW[word][lang])
+                say = tmpl.format(street=changed,
+                                  distance=_format_distance(segment, lang))
+            else:
+                say = (_TURN[word][lang].format(distance=_format_distance(segment, lang))
+                       if segment >= 10.0 else _TURN_NOW[word][lang])
+
+            steps.append({"at_m": round(at_m, 1), "type": word, "say": say,
+                          "street": nm, "named": bool(nm)})
+            if nm:
+                last_name = nm
 
         if used_stairs:
             steps.append({"at_m": 0.0, "type": "warning", "say": _STAIRS_WARN[lang]})
