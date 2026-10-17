@@ -82,3 +82,40 @@ correct check is that the `edge_id` array is unchanged. After the `d_max` rebuil
 it was verified byte-identical, so this sidecar did not need regenerating.
 
 Coverage: 22.4% of edges (most Hong Kong footways are unnamed in OSM).
+
+## CSDI augmentation (graph completeness)
+
+32.7% of the TD guide path had no OSM pedestrian edge within 6 m. Measured cause:
+
+| Of the 17.39 km unmatched guide path | |
+|---|---|
+| has a **CSDI 3DPN** segment within 6 m | **9.62 km (55.3%)** |
+| nothing from either source | 7.77 km (44.7%) |
+
+So most of the gap was OSM missing pedestrian geometry that CSDI already has.
+`backend/build_csdi_edges.py` adds **only** the CSDI segments that carry unmatched
+guide path and are themselves >6 m from any OSM edge — not the whole CSDI network:
+
+```
+1,862 CSDI segments identified -> 1,064 edges added, 1,036 synthetic nodes
+```
+
+| | before | after |
+|---|---|---|
+| edges | 707,478 | **708,542** |
+| `tau=present` | 1,949 (0.28%) | **2,635 (0.37%)** — +35% |
+| Cheung Sha Wan present | 118 (2.42%) | **141 (2.87%)** |
+| components | 4,909 | 5,081 |
+| largest component | 402,839 | 403,146 (unchanged 56.9%) |
+
+**45% of the added edges joined the main component** (475 of 1,064); the other 55%
+formed small islands because their nodes could not be stitched to the OSM graph
+within the 10 m snap radius. Of the +686 `tau=present` edges, **292 are in the
+main component** and can therefore appear in a route. Treat +35% as the data gain
+and **+15% as the routing gain**.
+
+The remaining 44.7% of unmatched guide path has no geometry in either source — it
+needs better data, not a better algorithm.
+
+Stitching the islands is the obvious next improvement: the `map` prototype has a
+`bridge_gaps.py` that is not part of this pipeline.
