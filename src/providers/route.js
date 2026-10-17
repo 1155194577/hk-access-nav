@@ -24,6 +24,8 @@ import { walkingRoute as routeOnDevice } from '@/core/pedestrian-router';
 import { HK_NAV_BASE_URL, HK_NAV_PATHS, TIMEOUTS } from '@/core/config';
 import { ApiError, joinUrl, postJson } from '@/core/http';
 import { bearingDegrees, distanceMeters, formatDistance } from '@/core/geo';
+import { offlineUncoveredMessage, routeSourceFor, routeSourceMode } from '@/core/routing-mode';
+import { loadSettings } from '@/core/storage';
 
 /** Reject a GPS fix worse than this; HK high-rises routinely give 50-100 m error. */
 export const MAX_ACCURACY_METERS = 50;
@@ -63,23 +65,44 @@ export function offlineAreas() {
 export async function walkingRoute(origin, destination, options = {}) {
   const language = options.language ?? 'yue';
 
-  if (hasOfflineCoverage(origin) && hasOfflineCoverage(destination)) {
+  // The caller may pass a mode (diagnostics, tests); otherwise honour the stored
+  // setting so every screen behaves the same without threading it through.
+  const mode = routeSourceMode(options.routingMode ?? (await loadSettings()).routingMode);
+
+  const originCovered = hasOfflineCoverage(origin);
+  const destinationCovered = hasOfflineCoverage(destination);
+  const source = routeSourceFor(mode, { originCovered, destinationCovered });
+
+  // The user explicitly chose the offline map and it does not reach here. Say so
+  // with the setting named, instead of quietly calling the server: silently
+  // overriding a privacy/connectivity choice is worse than failing.
+  if (source === 'offline-uncovered') {
+    throw new RoutingError(offlineUncoveredMessage(offlineAreas()), {
+      code: 'outside_coverage',
+      retryable: false,
+    });
+  }
+
+  if (source === 'offline') {
     try {
       const plan = routeOnDevice(origin, destination, {
         profileId: options.profileId ?? 'stepFree',
         language,
       });
-      return normalise(plan);
+      return { ...normalise(plan), routingMode: mode, routingSource: 'offline' };
     } catch (error) {
       // A no-route or poor-fix result from the surveyed network is more
       // trustworthy than anything the stub server will say, so report it rather
       // than silently downgrading to a worse source.
       if (error instanceof RoutingError) throw error;
-      // Anything else is a bug; fall through so the user still gets something.
+      // Anything else is a bug. In 'auto' fall through so the user still gets
+      // something; in 'offline' they asked for no network, so surface it.
+      if (mode === 'offline') throw error;
     }
   }
 
-  return routeViaServer(origin, destination, language, options);
+  const fromServer = await routeViaServer(origin, destination, language, options);
+  return { ...fromServer, routingMode: mode, routingSource: 'server' };
 }
 
 /** Map the on-device result onto the shape the screens already consume. */
