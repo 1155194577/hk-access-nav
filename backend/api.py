@@ -225,6 +225,31 @@ def navigate_nearby(
         raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)})
 
 
+# ----------------------------------------------------------------------- root
+@app.get("/", tags=["ops"])
+def root() -> dict:
+    """Service banner, and the app's cleartext-HTTP canary.
+
+    This exists because of a real misdiagnosis: the app's diagnostics screen does
+    a short `GET /` to prove that ATS is not blocking plain HTTP, and its shared
+    status helper reports ANY 404 as "the model or path does not exist". Without
+    a route here the server answered 404, so the canary failed and the message
+    read as though the routing path were wrong — when routing was fine and the
+    connection had demonstrably worked (a 404 is still an HTTP response).
+
+    Note this must be registered BEFORE the `/` mount below, or `vlm.app`
+    answers first and this never runs.
+    """
+    return {
+        "service": "HK Access Nav API",
+        "status": "ok",
+        "routing": "/api/navigate/route",
+        "vision": "/api/vlm",
+        "health": "/health",
+        "docs": "/docs",
+    }
+
+
 # --------------------------------------------------------------- sub-app mounts
 # Last, and at "/" — vlm.py's routes are already rooted at /api/vlm.
 app.mount("/", vlm.app)
