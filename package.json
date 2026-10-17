@@ -42,7 +42,7 @@
     "ios": "expo run:ios",
     "android": "expo run:android",
     "web": "expo start --web",
-    "test": "node scripts/check-parser-parity.mjs && node tests/core.test.mjs && node tests/reply.test.mjs && node tests/simulate.test.mjs && node tests/cloud-health.test.mjs && node tests/locales.test.mjs && node tests/on-device-router.test.mjs && node tests/vision-policy.test.mjs && node tests/routing-mode.test.mjs",
+    "test": "node scripts/check-parser-parity.mjs && node tests/core.test.mjs && node tests/reply.test.mjs && node tests/simulate.test.mjs && node tests/cloud-health.test.mjs && node tests/locales.test.mjs && node tests/on-device-router.test.mjs && node tests/vision-policy.test.mjs && node tests/routing-mode.test.mjs && node tests/home-route.test.mjs",
     "demo-frame": "node scripts/make-demo-frame.mjs",
     "verify": "expo export --platform web --output-dir dist"
   },

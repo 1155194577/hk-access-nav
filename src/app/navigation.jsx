@@ -7,6 +7,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { speech } from '@/core/speech';
 import { clearTrip, startTrip, useTrip } from '@/core/store';
+import { resolveHomeDestination } from '@/core/home-route';
+import { loadHome } from '@/core/storage';
 import { originFor, randomNearbyPoint } from '@/core/simulate';
 import { bearingDegrees, clockDirection, distanceMeters, formatDistance } from '@/core/geo';
 import * as haptics from '@/core/haptics';
@@ -59,24 +61,32 @@ export default function NavigationScreen() {
   /**
    * "Go back home".
    *
-   * Home is SIMULATED for this build: a random point a short walk from wherever
-   * the user is. The real app stores the user's own home coordinate on-device
-   * (see core/storage.js) and routes there; using that here would just mean
-   * "no home set" on a fresh install, which is not a useful demo.
+   * Routes to the home coordinate saved in Settings. Until this was fixed the
+   * stored value was only used as a gate (index.jsx refuses without one) and
+   * this screen then walked the user to a random nearby point while announcing
+   * it as 屋企 — the label was a lie and the destination was not theirs.
+   *
+   * The random point survives only as an explicit fallback for the no-home case
+   * (a deep link straight to ?mode=home). When it is used, `simulated` and the
+   * spoken name both say so, so the two can never disagree.
    */
   const buildHomeRoute = useCallback(async () => {
     setIsRouting(true);
     try {
       const origin = originFor(location, isUsable);
-      const home = randomNearbyPoint(origin);
+      const stored = await loadHome();
+      const { destination: home, simulated, spokenName } = resolveHomeDestination(
+        stored,
+        randomNearbyPoint(origin)
+      );
 
       const built = await walkingRoute(origin, home, { language: 'yue' });
       const withTrip = {
         ...built,
         origin,
         startedAt: Date.now(),
-        spokenName: '屋企（模擬）',
-        simulated: true,
+        spokenName,
+        simulated,
       };
 
       startTrip(withTrip, home);
