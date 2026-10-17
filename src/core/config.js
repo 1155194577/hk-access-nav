@@ -37,8 +37,18 @@ export const API_KEY = process.env.EXPO_PUBLIC_SILICONFLOW_API_KEY ?? '';
 /** Mainland endpoint. The docs also publish api.siliconflow.com. */
 export const SILICONFLOW_BASE_URL = 'https://api.siliconflow.cn/v1';
 
-/** Live HK Nav server. Routing is authoritative here. */
-export const HK_NAV_BASE_URL = 'http://47.237.92.84:8000';
+/**
+ * HK Nav server. Routing is authoritative here.
+ *
+ * Override with `EXPO_PUBLIC_HK_NAV_BASE_URL` so moving the backend (a new VM, a
+ * local test, a tunnel) does not require editing source. Expo inlines
+ * `EXPO_PUBLIC_*` at bundle time, so a rebuild is still required after changing
+ * it — and a plain-HTTP address also needs an ATS exception in app.json, or iOS
+ * blocks every request while curl on the laptop works fine. HTTPS avoids both
+ * problems; see docs/IOS-INSTALL.md §7.
+ */
+export const HK_NAV_BASE_URL =
+  process.env.EXPO_PUBLIC_HK_NAV_BASE_URL ?? 'http://47.237.92.84:8000';
 
 /** Live-server paths, as actually observed on the running service. */
 export const HK_NAV_PATHS = {
