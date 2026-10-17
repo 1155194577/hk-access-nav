@@ -1,0 +1,18 @@
+# HK Access Nav backend
+#
+# Derived from the actual third-party imports in api.py, routing.py and vlm.py.
+# Re-check with:
+#   grep -hE '^(from|import) ' *.py | grep -v '^from \.' | sort -u
+#
+# numpy and pandas are deliberately absent: routing.py is currently a stub and
+# uses only the standard library. They become necessary only when the surveyed
+# router (which loads a ~400 MB index) replaces RoutingService.
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+pydantic>=2.7,<3.0        # api.py request models; also pulled in by fastapi
+
+httpx>=0.27,<1.0          # vlm.py -> SiliconFlow
+python-dotenv>=1.0,<2.0   # api.py loads .env before importing vlm
+
+Pillow>=10.0,<12.0        # vlm.py: EXIF stripping and downscaling
