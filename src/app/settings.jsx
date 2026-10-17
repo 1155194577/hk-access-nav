@@ -28,6 +28,17 @@ const SETTINGS_SAMPLE = {
 
 const LABELS = { yue: 'Cantonese', zh: 'Mandarin', en: 'English' };
 
+/**
+ * Routing mode changes are worth speaking: they decide what happens when the
+ * user walks out of the surveyed area, which is not something to discover mid
+ * journey from silence.
+ */
+const ROUTING_ANNOUNCE = {
+  auto: '已改為自動選擇路線。',
+  server: '已改為伺服器路線，需要數據連接。',
+  offline: '已改為離線地圖。只覆蓋中環、尖沙咀、長沙灣。',
+};
+
 export default function SettingsScreen() {
   const router = useRouter();
   const { location, isUsable, error: locationError } = useLocation({ enabled: true });
@@ -109,6 +120,15 @@ export default function SettingsScreen() {
       setTimeout(() => setSaved(false), 1500);
     },
     [settings]
+  );
+
+  const setRoutingMode = useCallback(
+    (mode) => {
+      haptics.tick();
+      void update({ routingMode: mode });
+      speech.announce(ROUTING_ANNOUNCE[mode], { priority: 'interrupt' });
+    },
+    [update]
   );
 
   async function adoptCurrentLocation() {
@@ -271,6 +291,36 @@ export default function SettingsScreen() {
               {home
                 ? `Saved: ${home.latitude.toFixed(5)}, ${home.longitude.toFixed(5)}`
                 : 'No home location saved yet.'}
+            </Text>
+          </View>
+        </Section>
+
+        <Section title="ROUTING">
+          <Row
+            label="Automatic"
+            hint="Offline map when your trip is inside it, otherwise the server."
+            selected={settings.routingMode === 'auto'}
+            onPress={() => setRoutingMode('auto')}
+          />
+          <Row
+            label="Server routing"
+            hint="City-wide coverage. Needs a data connection, and sends your origin and destination to the server."
+            selected={settings.routingMode === 'server'}
+            onPress={() => setRoutingMode('server')}
+          />
+          <Row
+            label="Offline map"
+            hint="No data, no round trip. Covers Central, Tsim Sha Tsui and Cheung Sha Wan only."
+            selected={settings.routingMode === 'offline'}
+            onPress={() => setRoutingMode('offline')}
+          />
+          <View style={styles.infoRow}>
+            <Text style={styles.infoText}>
+              {settings.routingMode === 'offline'
+                ? 'Outside those three districts the app will say it cannot route, rather than quietly going online.'
+                : settings.routingMode === 'server'
+                  ? 'Every route request goes to the server, including trips inside the offline map.'
+                  : 'The offline map is preferred wherever it covers the trip.'}
             </Text>
           </View>
         </Section>

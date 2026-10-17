@@ -39,6 +39,19 @@ export const DEFAULT_SETTINGS = {
    * every few seconds to Qwen3-VL and bills per frame. Either way the user chooses.
    */
   cloudVision: false,
+  /**
+   * Which routing source to use. See core/routing-mode.js.
+   *
+   *   'auto'    offline map when the trip is inside it, otherwise the server
+   *   'server'  always the server (city-wide, needs data, sends your origin)
+   *   'offline' always the bundled map (three districts, no data, no round trip)
+   *
+   * 'auto' keeps the previous behaviour for anyone who never opens Settings.
+   * Choosing 'offline' is an explicit connectivity/privacy decision and is never
+   * overridden — if the map does not cover the trip, the app says so instead of
+   * quietly calling the server.
+   */
+  routingMode: 'auto',
 };
 
 export async function loadHome() {
