@@ -43,6 +43,13 @@ import graphs from '../data/network/index';
 
 import { decodeGraph } from './graph-codec';
 import { HAZARD_PROXIMITY_M, hazardsFor } from './hazards-network';
+import {
+  crossingLabel,
+  distanceText,
+  isCantonese,
+  render,
+  turnPhrase,
+} from './instruction-templates';
 import { MAX_SNAP_M, MAX_DEST_SNAP_M } from './snap-limits';
 
 /**
@@ -111,7 +118,7 @@ export function turnWord(fromBearing, toBearing) {
   return 'Turn around';
 }
 
-const plural = (metres) => (metres === 1 ? '1 metre' : `${metres} metres`);
+// Distance wording lives in `instruction-templates.js`, where it can be tested.
 
 // --------------------------------------------------------------- profiles
 
@@ -354,21 +361,6 @@ export function graphFor(point) {
 
 // --------------------------------------------------------------- description
 
-const FEATURE_LABEL = {
-  1: 'footway',
-  2: 'footbridge',
-  4: 'subway',
-  8: 'escalator',
-  9: 'travelator',
-  10: 'lift',
-  11: 'ramp',
-  12: 'staircase',
-  30: 'signalised crossing',
-  31: 'zebra crossing',
-  32: 'cautionary crossing',
-  33: 'crossing',
-};
-
 function edgeCategory(edge) {
   if (edge.s) return 'stairs';
   if (edge.l) return 'lift';
@@ -448,39 +440,41 @@ export function mergeInstructions(graph, edgeIndices, language = 'en') {
 
 function describe(run, language) {
   const metres = Math.round(run.metres);
-  const name = language === 'tc' || language === 'yue' ? run.edge.tc || run.edge.en : run.edge.en;
-  const via = name ? ` along ${name}` : '';
+  const name = isCantonese(language) ? run.edge.tc || run.edge.en : run.edge.en;
+  const values = { street: name, distance: distanceText(metres, language) };
   let body;
 
   switch (run.category) {
     case 'stairs':
-      body = `There are stairs here, about ${plural(metres)}.`;
+      body = render('stairs', language, values);
       break;
     case 'lift':
-      body = name ? `Take the lift at ${name}.` : 'Take the lift.';
+      body = render(name ? 'liftNamed' : 'lift', language, values);
       break;
     case 'escalator':
-      body = 'Take the escalator.';
+      body = render('escalator', language, values);
       break;
     case 'ramp':
-      body = `Go up the ramp for about ${plural(metres)}.`;
+      body = render('ramp', language, values);
       break;
-    case 'crossing': {
-      const label = FEATURE_LABEL[run.edge.ft] || 'crossing';
-      body = `Cross the road at the ${label}${name ? ` on ${name}` : ''}.`;
+    case 'crossing':
+      body = render(name ? 'crossingNamed' : 'crossing', language, {
+        ...values,
+        label: crossingLabel(run.edge.ft, language),
+      });
       break;
-    }
     case 'indoor':
-      body = `Continue inside for about ${plural(metres)}.`;
+      body = render('indoor', language, values);
       break;
     default:
-      body = `Continue${via} for about ${plural(metres)}.`;
+      body = render(name ? 'walkNamed' : 'walk', language, values);
   }
 
   if (run.turn) {
-    return run.category === 'walk' && via
-      ? `${run.turn}, then continue${via} for about ${plural(metres)}.`
-      : `${run.turn}. ${body}`;
+    const turn = turnPhrase(run.turn, language);
+    return run.category === 'walk' && name
+      ? render('turnWalkNamed', language, { ...values, turn })
+      : render('turnThenBody', language, { ...values, turn, body });
   }
   return body;
 }
