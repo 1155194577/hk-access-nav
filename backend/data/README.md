@@ -119,3 +119,45 @@ needs better data, not a better algorithm.
 
 Stitching the islands is the obvious next improvement: the `map` prototype has a
 `bridge_gaps.py` that is not part of this pipeline.
+
+## Stitching the CSDI islands
+
+The augmentation above left 55% of its edges in isolated components. `backend/
+stitch_csdi_islands.py` ports the `map` prototype's `bridge_gaps.py`: union-find
+over components, a grid search, and a virtual edge added **only** between nodes in
+different components that are within 8 m and not already connected. Every bridge
+is tagged `src = gap_bridge` so it can be audited or removed.
+
+| | before stitch | after |
+|---|---|---|
+| edges | 708,542 | **708,643** (+101 bridges) |
+| CSDI edges in main component | 475 / 1,064 (45%) | **564 (53%)** |
+| CSDI present **and routable** | 292 | **352** (+21%) |
+| components | 5,081 | **4,980** |
+| largest component | 403,146 | 403,277 |
+
+Bridge lengths: median 5.8 m, p95 7.7 m, max 8.0 m.
+
+### Why it stops at 8 m
+
+The remaining 680 island nodes are **not** jitter gaps:
+
+| distance to nearest node in another component | |
+|---|---|
+| p10 | 12.1 m |
+| **p50** | **22.8 m** |
+| p75 | 37.1 m |
+| p95 | 192.9 m |
+| > 8 m | **680 of 680 (100%)** |
+| > 20 m | 394 (58%) |
+
+Bridging a 23 m gap means asserting a connection that may cross a road, a wall, or
+a building. For a blind pedestrian that is a fabricated crossing, so this stops at
+8 m — the range where a gap is plausibly survey jitter rather than missing
+geometry. The rest needs real connectivity data (mall entrances, footbridge
+joins), not a wider radius.
+
+**Scope decision:** bridges are only added where at least one node belongs to a
+CSDI-added edge. A global pass would also merge OSM's own 4,909 components, and
+many of those gaps are real — two footway ends either side of a road with no
+crossing there. That belongs to the pipeline that owns OSM, not to this tool.
