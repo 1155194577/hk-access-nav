@@ -234,3 +234,35 @@ if routing is not None:
 if routing is not None:
     app.mount("/api/navigate", routing.app)
 app.mount("/", vlm.app)
+
+
+# ------------------------------------------------------------------ entrypoint
+# `python api.py` starts the server. No uvicorn command line, no extra flags.
+#
+# uvicorn is handed the app OBJECT rather than the "api:app" import string, so
+# running this file as a script does not import api.py a second time under a
+# different module name. The reloader is the one exception — it needs an import
+# string — so RELOAD=1 switches to that mode.
+if __name__ == "__main__":
+    import uvicorn
+
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8000"))
+    reload_enabled = os.getenv("RELOAD", "").strip().lower() in {"1", "true", "yes", "on"}
+
+    # Bind 0.0.0.0 so a phone on the network can reach it. On an untrusted
+    # network set HOST=127.0.0.1 — this endpoint is unauthenticated and spends
+    # your SiliconFlow key.
+    # flush=True so the banner is not buried behind uvicorn's stderr logs when
+    # stdout is piped (systemd, docker logs, `| tee`).
+    print(f"HK Access Nav API  ->  http://{host}:{port}", flush=True)
+    print("  vision   : /api/vlm  (docs at /api/vlm/docs)", flush=True)
+    print(
+        f"  routing  : {'/api/navigate/*' if routing is not None else 'not present (vision only)'}",
+        flush=True,
+    )
+
+    if reload_enabled:
+        uvicorn.run("api:app", host=host, port=port, reload=True)
+    else:
+        uvicorn.run(app, host=host, port=port)
