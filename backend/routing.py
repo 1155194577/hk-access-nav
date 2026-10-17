@@ -101,12 +101,12 @@ _INTRO = {
     "en": "No footpath route available. This is a direct line and does not follow footpaths.",
 }
 _BEARING = {
-    "yue": "向{bearing}度方向行{distance}。",
-    "en": "Head {bearing} degrees for {distance}.",
+    "yue": "向{compass}方向行{distance}。",
+    "en": "Head {compass} for {distance}.",
 }
 _DEPART = {
-    "yue": "開始行，向{bearing}度方向行{distance}。",
-    "en": "Start walking {bearing} degrees for {distance}.",
+    "yue": "向{compass}方向行{distance}。",
+    "en": "Head {compass} for {distance}.",
 }
 _TURN = {
     "left": {"yue": "轉左，跟住行{distance}。", "en": "Turn left, then continue {distance}."},
@@ -127,8 +127,8 @@ _TURN_NOW = {
 # Coverage is partial (most footways are unnamed in OSM), so instructions MIX the
 # two forms: a name where one exists, a distance where none does.
 _DEPART_ON = {
-    "yue": "由{street}開始行，向{bearing}度方向行{distance}。",
-    "en": "Start on {street}, walking {bearing} degrees for {distance}.",
+    "yue": "由{street}開始行，向{compass}方向行{distance}。",
+    "en": "Start on {street}, heading {compass} for {distance}.",
 }
 _TURN_ONTO = {
     "left": {"yue": "轉左入{street}，跟住行{distance}。", "en": "Turn left onto {street}, then continue {distance}."},
@@ -196,6 +196,28 @@ def _format_distance(metres: float, language: str) -> str:
     if metres < 1000:
         return f"{int(round(metres))} 米" if language == "yue" else f"{int(round(metres))} metres"
     return f"{metres / 1000:.1f} 公里" if language == "yue" else f"{metres / 1000:.1f} km"
+
+
+#: 8-point compass. A degree bearing is unusable when you cannot see: nobody can
+#: "walk 107 degrees", and the user has no way to check they are doing it. The app
+#: already speaks compass points and clock faces (src/core/geo.js); the server
+#: should not be the one place that speaks protractor.
+_COMPASS = [
+    {"yue": "北", "en": "north"},
+    {"yue": "東北", "en": "north-east"},
+    {"yue": "東", "en": "east"},
+    {"yue": "東南", "en": "south-east"},
+    {"yue": "南", "en": "south"},
+    {"yue": "西南", "en": "south-west"},
+    {"yue": "西", "en": "west"},
+    {"yue": "西北", "en": "north-west"},
+]
+
+
+def _compass_word(bearing: float, lang: str) -> str:
+    """Nearest of the 8 compass points. 45-degree sectors."""
+    idx = int(round(bearing / 45.0)) % 8
+    return _COMPASS[idx].get(lang, _COMPASS[idx]["en"])
 
 
 def _turn_word(delta: float) -> str | None:
@@ -621,14 +643,19 @@ class GraphRouter:
         if first_name:
             say = _DEPART_ON[lang].format(
                 street=first_name,
-                bearing=int(round(bearings[0])),
+                compass=_compass_word(bearings[0], lang),
                 distance=_format_distance(first_seg, lang))
         else:
             say = _DEPART[lang].format(
-                bearing=int(round(bearings[0])),
+                compass=_compass_word(bearings[0], lang),
                 distance=_format_distance(first_seg, lang))
         steps.append({"at_m": 0.0, "type": "depart", "say": say,
-                      "street": first_name, "named": bool(first_name)})
+                      "street": first_name, "named": bool(first_name),
+                      # keep the raw bearing for clients that know the user's
+                      # heading and can turn it into a clock face ("2 o'clock"),
+                      # which is more precise than a compass point
+                      "bearing": int(round(bearings[0])),
+                      "compass": _compass_word(bearings[0], lang)})
 
         # ---- turns
         last_name = first_name
@@ -715,7 +742,8 @@ class RoutingService:
         steps = [
             {"at_m": 0.0, "type": "warning", "say": _INTRO[lang]},
             {"at_m": 0.0, "type": "depart", "say": _BEARING[lang].format(
-                bearing=int(round(bearing)), distance=_format_distance(metres, lang))},
+                compass=_compass_word(bearing, lang),
+                distance=_format_distance(metres, lang))},
             {"at_m": round(metres, 1), "type": "arrive", "say": _ARRIVE[lang]},
         ]
         return RouteResult(
