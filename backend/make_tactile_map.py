@@ -153,12 +153,22 @@ TEMPLATE = r"""<!DOCTYPE html>
   <h1>Hong Kong tactile paving</h1>
   <div id="rows"></div>
   <p style="margin-top:8px" class="num" id="totals"></p>
+  <p id="status" class="num" style="margin:2px 0 6px">loading…</p>
   <p style="font-size:11px;color:#777;margin:0">
     Transport Department survey, via CSDI.<br />
     Map tiles &copy; OpenStreetMap contributors.
   </p>
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  // If the CDN is unreachable the map stays blank and looks like broken data.
+  if (typeof L === 'undefined') {
+    document.getElementById('map').innerHTML =
+      '<div style="padding:24px;font:15px system-ui">' +
+      '<b>Leaflet failed to load.</b><br>This page needs internet access for the ' +
+      'Leaflet library from unpkg.com and for the OSM map tiles.</div>';
+  }
+</script>
 <script>
 const DATA = __DATA__;
 const SCALE = 1e6;
@@ -170,52 +180,72 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 }).addTo(map);
 
+// One shared canvas for every layer. Creating L.canvas() per polyline makes a new
+// canvas element each time — with ~100k polylines that is ~100k canvases and
+// nothing ever paints. This single renderer is the whole point.
+const canvasRenderer = L.canvas({ padding: 0.5 });
+
 const rows = document.getElementById('rows');
+const status = document.getElementById('status');
 const groups = {};
 
-for (const [key, d] of Object.entries(DATA)) {
-  // decode delta-encoded integer polylines back into [lat, lng] pairs
-  const lines = d.lines.map(row => {
-    const pts = [];
-    let x = row[0], y = row[1];
-    pts.push([y / SCALE, x / SCALE]);
-    for (let i = 2; i < row.length; i += 2) {
-      x += row[i]; y += row[i + 1];
-      pts.push([y / SCALE, x / SCALE]);
-    }
-    return pts;
-  });
+function fail(msg) {
+  status.textContent = msg;
+  status.style.color = '#b00020';
+  status.style.fontWeight = '600';
+}
+window.addEventListener('error', e => fail('Error: ' + e.message));
 
-  const g = L.layerGroup();
-  for (const pts of lines) {
-    L.polyline(pts, {
+try {
+  for (const [key, d] of Object.entries(DATA)) {
+    // decode delta-encoded integer polylines back into [lat, lng] pairs
+    const lines = [];
+    for (const row of d.lines) {
+      const pts = [];
+      let x = row[0], y = row[1];
+      pts.push([y / SCALE, x / SCALE]);
+      for (let i = 2; i < row.length; i += 2) {
+        x += row[i]; y += row[i + 1];
+        pts.push([y / SCALE, x / SCALE]);
+      }
+      lines.push(pts);
+    }
+    d._lines = lines.length;
+
+    // A multi-part polyline: ONE Leaflet object per layer, not one per line.
+    const layer = L.polyline(lines, {
       color: d.colour,
       weight: key === 'kerb' ? 2 : (key === 'warn' ? 2 : 3),
       opacity: 0.9,
       interactive: false,
-      renderer: L.canvas({ padding: 0.5 })
-    }).addTo(g);
+      smoothFactor: 1.2,
+      renderer: canvasRenderer
+    });
+    groups[key] = layer;
+
+    const sw = document.createElement('div');
+    sw.className = 'row';
+    sw.innerHTML = `<span class="swatch" style="background:${d.colour}"></span>` +
+                   `<b>${d.label}</b><br><span class="num">` +
+                   `${d.features.toLocaleString()} lines · ${d.km.toFixed(1)} km</span>`;
+    rows.appendChild(sw);
   }
-  groups[key] = g;
 
-  const sw = document.createElement('div');
-  sw.className = 'row';
-  sw.innerHTML = `<span class="swatch" style="background:${d.colour}"></span>` +
-                 `<b>${d.label}</b><br><span class="num">` +
-                 `${d.features.toLocaleString()} lines · ${d.km.toFixed(1)} km</span>`;
-  rows.appendChild(sw);
+  const overlays = {};
+  for (const [key, d] of Object.entries(DATA)) overlays[d.label] = groups[key];
+  for (const [key, d] of Object.entries(DATA)) if (d.on) groups[key].addTo(map);
+  L.control.layers(null, overlays, { collapsed: false }).addTo(map);
+
+  const totalKm = Object.values(DATA).reduce((s, d) => s + d.km, 0);
+  const totalPts = Object.values(DATA).reduce((s, d) => s + d.points, 0);
+  document.getElementById('totals').textContent =
+    `${totalKm.toFixed(1)} km surveyed · ${totalPts.toLocaleString()} points`;
+  status.textContent = 'Drawn: ' +
+    Object.values(DATA).filter(d => d.on).map(d => d.label).join(', ');
+  status.style.color = '#2e7d32';
+} catch (err) {
+  fail('Could not draw: ' + (err && err.message ? err.message : err));
 }
-
-const overlays = {};
-for (const [key, d] of Object.entries(DATA)) overlays[d.label] = groups[key];
-for (const [key, d] of Object.entries(DATA)) {
-  if (d.on) groups[key].addTo(map);
-}
-L.control.layers(null, overlays, { collapsed: false }).addTo(map);
-
-const totalKm = Object.values(DATA).reduce((s, d) => s + d.km, 0);
-document.getElementById('totals').textContent =
-  `All layers: ${totalKm.toFixed(1)} km of surveyed geometry`;
 
 // Draw the canvas layers once the tiles have settled, so first paint is not blocked.
 map.whenReady(() => setTimeout(() => map.invalidateSize(), 50));
