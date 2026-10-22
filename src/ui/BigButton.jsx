@@ -1,5 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { VARIANTS } from './button-variants';
 import { Colors, Radius, Spacing, TouchTarget, Typography } from './theme';
 
 /**
@@ -45,13 +46,15 @@ export function BigButton({
         {icon ? (
           // Decorative only. Without hiding it, VoiceOver reads the emoji name
           // ("compass") before the label, which is noise on every single control.
-          <Text
-            style={styles.icon}
-            accessibilityElementsHidden
-            importantForAccessibility="no"
-            aria-hidden>
-            {icon}
-          </Text>
+          <View style={styles.iconChip}>
+            <Text
+              style={styles.icon}
+              accessibilityElementsHidden
+              importantForAccessibility="no"
+              aria-hidden>
+              {icon}
+            </Text>
+          </View>
         ) : null}
         <View style={styles.labels}>
           <Text style={[styles.title, { color: palette.text }]}>{title}</Text>
@@ -64,42 +67,11 @@ export function BigButton({
   );
 }
 
-const VARIANTS = {
-  primary: {
-    background: Colors.primary,
-    pressed: Colors.primaryPressed,
-    border: Colors.primary,
-    text: '#FFFFFF',
-    subtitle: 'rgba(255,255,255,0.85)',
-  },
-  secondary: {
-    background: Colors.surfaceRaised,
-    pressed: Colors.surface,
-    border: Colors.border,
-    text: Colors.text,
-    subtitle: Colors.textSecondary,
-  },
-  danger: {
-    background: Colors.danger,
-    pressed: '#D93A3C',
-    border: Colors.danger,
-    text: '#FFFFFF',
-    subtitle: 'rgba(255,255,255,0.85)',
-  },
-  accent: {
-    background: '#C2478B',
-    pressed: '#A03372',
-    border: '#C2478B',
-    text: '#FFFFFF',
-    subtitle: 'rgba(255,255,255,0.85)',
-  },
-};
-
 const styles = StyleSheet.create({
   button: {
     minHeight: TouchTarget.primary,
     borderRadius: Radius.large,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderWidth: 2,
     paddingHorizontal: Spacing.four,
     paddingVertical: Spacing.three,
     justifyContent: 'center',
@@ -110,8 +82,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.three,
   },
+  /**
+   * Emoji render in their own colours and wash out on a bright fill, so they get
+   * a near-black chip. It also gives every action a single high-contrast anchor
+   * at the same position, which helps a low-vision user find the row.
+   */
+  iconChip: {
+    width: 52,
+    height: 52,
+    borderRadius: Radius.medium,
+    backgroundColor: Colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   icon: {
-    fontSize: 34,
+    fontSize: 30,
   },
   labels: {
     flex: 1,

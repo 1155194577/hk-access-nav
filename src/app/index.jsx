@@ -10,7 +10,10 @@ import { useScreenAnnouncement } from '@/hooks/useScreenAnnouncement';
 import { BigButton } from '@/ui/BigButton';
 import { Colors, Radius, Spacing, Typography } from '@/ui/theme';
 
-const ACTIONS = ['Random visit', 'Go back home', 'What is this', 'Settings'];
+// Must match the visible labels below: this array is what VoiceOver reads out as
+// the contents of the screen, and it previously announced a "Random visit"
+// button that does not exist.
+const ACTIONS = ['Nearby MTR stations', 'Go back home', 'What is this?', 'Settings'];
 
 export default function MainMenuScreen() {
   const router = useRouter();
@@ -63,7 +66,7 @@ export default function MainMenuScreen() {
             title="Nearby MTR stations"
             subtitle="Finds the closest stations to where you are"
             icon="🧭"
-            variant="primary"
+            variant="mtr"
             onPress={() => {
               haptics.tick();
               router.push('/visit');
@@ -75,7 +78,7 @@ export default function MainMenuScreen() {
             title="Go back home"
             subtitle="Walk to your saved home location"
             icon="🏠"
-            variant="primary"
+            variant="home"
             disabled={busy}
             onPress={goHome}
             accessibilityHint="Starts navigating to the home location you saved in settings."
@@ -85,7 +88,7 @@ export default function MainMenuScreen() {
             title="What is this?"
             subtitle="Point the camera and hear a description"
             icon="📷"
-            variant="accent"
+            variant="camera"
             onPress={() => {
               haptics.tick();
               router.push('/what-is-this');
@@ -133,7 +136,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   subtitle: {
-    color: Colors.primary,
+    color: Colors.primaryText,
     fontSize: Typography.title,
     fontWeight: '700',
   },
