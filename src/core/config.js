@@ -78,22 +78,36 @@ export const MODELS = {
    * Vision models, verified against GET /v1/models on this key. Qwen2.5-VL does
    * NOT exist on this account, so the original guess would have 404'd.
    *
-   * Fastest first, and that ordering is deliberate: measured on this account with
-   * the bundled demo frame, the 32B model took 12-18 s per frame against 2-4 s for
-   * the 8B one. A blind pedestrian standing at a kerb cannot wait 18 seconds in
-   * silence, so the small model answers first. There is no 27B Qwen3-VL: the sizes
-   * on this key are 8B, 30B-A3B and 32B.
+   * ORDER CHANGED 2026-10-23. The original ordering was measured, and correct
+   * when it was measured: the 8B answered in 2-4 s and the 32B in 12-18 s, so the
+   * small model went first. Those numbers then inverted. Re-measured on the same
+   * account, same demo frame, same prompt, two runs each:
    *
-   * The lister below is the 400/404 fallback chain. `vlmDeep` is the accuracy
-   * model, asked only when the fast answer is not worth trusting — see
-   * core/vision-policy.js.
+   *     Qwen3-VL-8B       38.8 s, 45.3 s      <- was the primary
+   *     Qwen3-VL-32B       5.3 s,  4.1 s
+   *     Qwen3-VL-30B-A3B   1.5 s,  1.2 s
+   *
+   * The 8B is now roughly thirty times slower than the 32B, so every call blew the
+   * 20 s budget and the whole feature failed. The 32B is also the more accurate of
+   * the two on this frame — "黃色的凸起盲道… 橫向條紋" against the 30B's hedged
+   * "可能係盲人引路磚" — so it leads. Latency here is a property of the provider's
+   * capacity rather than of model size, which is why this list carries a
+   * measurement date instead of a rationale.
+   *
+   * The list is also the fallback chain, and it is walked on a timeout as well as
+   * on a 400/404 — see `shouldTryNextModel` in core/vision-policy.js.
    */
   vlmCandidates: [
-    'Qwen/Qwen3-VL-8B-Instruct',
     'Qwen/Qwen3-VL-32B-Instruct',
+    'Qwen/Qwen3-VL-30B-A3B-Instruct',
+    'Qwen/Qwen3-VL-8B-Instruct',
   ],
-  vlm: 'Qwen/Qwen3-VL-8B-Instruct',
-  /** Read the tactile paving, the kerb and the railing. Slow, so it is escalated to. */
+  vlm: 'Qwen/Qwen3-VL-32B-Instruct',
+  /**
+   * The accuracy model. Now identical to the primary, so the escalation branch is
+   * a no-op (`deep !== answer.model` guards it) — kept so re-tiering stays a
+   * one-line change rather than a code change.
+   */
   vlmDeep: 'Qwen/Qwen3-VL-32B-Instruct',
 };
 
@@ -130,11 +144,19 @@ export const TIMEOUTS = {
   llmMs: 25000,
   routeMs: 15000,
   /**
-   * One vision call. The fast model answers in 2-4 s and the 32B in 12-18 s, so
-   * the budget is per call, not per screen: the escalated call gets its own.
-   * Worst realistic case is ~7 s + ~25 s, and only when the fast model shrugged.
+   * One vision call. The primary model now answers in 4-6 s, so this remains a
+   * generous ceiling per attempt — it replaced 20 s, which the 8B had started to
+   * exceed on every single call (measured 38-45 s).
    */
   vlmMs: 20000,
+  /**
+   * The whole vision attempt, across every model in `vlmCandidates`.
+   *
+   * Without this, letting a slow model fall through to the next one could stack
+   * 20 s + 20 s + 20 s of silence. 30 s is the total a user will ever wait before
+   * hearing something, whether that is a description or an honest failure.
+   */
+  vlmDeadlineMs: 30000,
   vlmDeepMs: 45000,
 };
 

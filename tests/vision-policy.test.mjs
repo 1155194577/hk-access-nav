@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { looksDoubtful, scanSources, MIN_USEFUL_LENGTH } from '../src/core/vision-policy.js';
+import { looksDoubtful, scanSources, shouldTryNextModel, MIN_USEFUL_LENGTH } from '../src/core/vision-policy.js';
 import { hazardsFromText } from '../src/core/hazards.js';
 
 // ------------------------------------------------------- live scanning policy
@@ -134,4 +134,27 @@ test('absence in one clause does not hide a hazard in the next', () => {
 test('a Cantonese 階梯 is recognised as stairs', () => {
   // The 32B model says 階梯 where the table originally only had 樓梯/梯級.
   assert.equal(hazardsFromText('前方有階梯。').hazards[0]?.code, 'stairs-ahead');
+});
+
+test('a timeout advances to the next model instead of failing the feature', () => {
+  // The regression this exists for: on 2026-10-23 the primary model took 38-45 s
+  // against a 20 s budget. A timeout has no HTTP status, so the old 400/404-only
+  // rule threw immediately and the feature failed while a working model sat next
+  // in the list.
+  assert.equal(shouldTryNextModel({ code: 'timeout', retryable: true }), true);
+  assert.equal(shouldTryNextModel({ code: 'network' }), true);
+  assert.equal(shouldTryNextModel({ status: 503 }), true);
+  assert.equal(shouldTryNextModel({ code: 'empty_description' }), true);
+});
+
+test('model-id drift still advances the list', () => {
+  assert.equal(shouldTryNextModel({ status: 400 }), true);
+  assert.equal(shouldTryNextModel({ status: 404 }), true);
+});
+
+test('a malformed request does not retry the same payload forever', () => {
+  assert.equal(shouldTryNextModel({ status: 422 }), false);
+  assert.equal(shouldTryNextModel({ code: 'missing_api_key', retryable: false }), false);
+  assert.equal(shouldTryNextModel(null), false);
+  assert.equal(shouldTryNextModel(undefined), false);
 });

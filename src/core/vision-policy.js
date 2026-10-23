@@ -1,17 +1,19 @@
 /**
  * When is a vision answer worth a second, slower look?
  *
- * Measured on the bundled demo frame (`assets/demo/sidewalk.png`), same prompt:
+ * Measured on the bundled demo frame (`assets/demo/sidewalk.png`), same prompt.
+ * These numbers INVERTED between measurements, which is the whole reason they are
+ * dated:
  *
- *   Qwen3-VL-8B-Instruct   2–4 s    correct but terse
- *   Qwen3-VL-32B-Instruct  12–18 s  names the tactile paving, the kerb and the railing
+ *   2026-10-16  8B 2-4 s, 32B 12-18 s   -> the small model answered first
+ *   2026-10-23  8B 38-45 s, 32B 4-6 s   -> the 32B leads, and answers better
  *
- * Neither number is right on its own. Eighteen seconds of silence while someone
- * stands at a kerb is unacceptable, and an answer that omits the kerb is not good
- * enough either. So the fast model always answers first, and the slow one is asked
- * only when the fast answer is not worth trusting: a refusal, an empty reply, or a
- * shrug. A confident answer is never re-asked — that would pay twice and stay
- * silent longer for the same words.
+ * The 32B names the tactile paving, the kerb and the railing; the 30B-A3B hedges
+ * ("可能係盲人引路磚") where the 32B is definite ("黃色的凸起盲道… 橫向條紋"). Silence
+ * while someone stands at a kerb is unacceptable, and an answer that omits the kerb
+ * is not good enough either — so the ordering is a measurement to re-take, not a
+ * principle. The secondary model is asked only when the primary's answer is not
+ * worth trusting: a refusal, an empty reply, or a shrug.
  *
  * This lives apart from the provider on purpose. The rule decides how long a blind
  * user waits, so it must be verifiable without a device, a network, or a bill.
@@ -67,4 +69,30 @@ export function looksDoubtful(result, opts = {}) {
   if (mode === 'describe' && text.length < MIN_USEFUL_LENGTH) return true;
 
   return false;
+}
+
+/**
+ * Should a failed vision call advance to the next model in the list?
+ *
+ * The chain used to advance only on 400/404 — model-id drift. That left a worse
+ * failure uncovered: a model that still exists but has become slow. On
+ * 2026-10-23 the primary answered in 38-45 s against a 20 s budget; every call
+ * timed out, and because a timeout carries no HTTP status the chain threw
+ * immediately instead of trying the model next to it, which answered in 5 s.
+ *
+ * So drift advances, and so does a transient failure — timeout, network error,
+ * 5xx, or an empty body. A malformed request does not: retrying that would repeat
+ * the same mistake against the same wrong payload.
+ *
+ * @param {{status?: number, code?: string, retryable?: boolean}} error
+ * @returns {boolean}
+ */
+export function shouldTryNextModel(error) {
+  if (!error) return false;
+  const status = typeof error.status === 'number' ? error.status : null;
+  if (status === 400 || status === 404) return true;   // model id drift
+  if (status !== null && status >= 500) return true;   // provider-side failure
+  if (error.code === 'timeout' || error.code === 'network') return true;
+  if (error.code === 'empty_description') return true;
+  return error.retryable === true;
 }
