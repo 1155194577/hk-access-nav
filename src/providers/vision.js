@@ -14,16 +14,17 @@
  * cannot see must therefore never be spoken as fact and must never be allowed to
  * raise a hazard. `normalise()` enforces that with `trusted: false`.
  *
- * The real model is SiliconFlow's `Qwen/Qwen3-VL-8B-Instruct` (verified present on
- * this key, along with the 32B). It reads the bundled demo frame correctly —
- * yellow tactile paving, grey pavement, railing, kerb — in roughly 1.5–7 s and
- * answers in Cantonese. It is the default source for `describe()`.
+ * The primary model is SiliconFlow's `Qwen/Qwen3-VL-32B-Instruct`. It reads the
+ * bundled demo frame correctly — yellow tactile paving, grey pavement, railing,
+ * kerb — in 4–6 s and answers in Cantonese. It is the default source for
+ * `describe()`.
  *
- * Sizes on this key are 8B, 30B-A3B and 32B; there is no 27B. Measured on the
- * demo frame with the same prompt: 8B ≈ 2–4 s and terse, 30B-A3B ≈ 12 s, 32B
- * ≈ 12–18 s and the most complete. `describe({ escalate: true })` takes the fast
- * answer and only pays for the 32B when the fast one shrugged — the rule lives in
- * `core/vision-policy.js`.
+ * Sizes on this key are 8B, 30B-A3B and 32B; there is no 27B. Latency on this
+ * account is NOT proportional to size and has moved a long way: on 2026-10-23 the
+ * 8B took 38-45 s and the 32B 4-6 s, the reverse of the 2026-10-16 measurement.
+ * That is why the list in `core/config.js` carries a date, and why a timeout now
+ * advances to the next model instead of failing the call — see
+ * `shouldTryNextModel` in `core/vision-policy.js`.
  *
  * Note the model rejects images smaller than 28 px on a side, so any probe image
  * must be at least 64x64.
@@ -45,7 +46,7 @@
 import { API_KEY, HK_NAV_BASE_URL, HK_NAV_PATHS, MODELS, SILICONFLOW_BASE_URL, TIMEOUTS } from '../core/config';
 import { ApiError, joinUrl, postJson } from '../core/http';
 import { hazardsFromText } from '../core/hazards';
-import { looksDoubtful } from '../core/vision-policy';
+import { looksDoubtful, shouldTryNextModel } from '../core/vision-policy';
 
 /**
  * The question asked of the model. A bare "describe this" produces prose that is
@@ -211,14 +212,18 @@ export async function describeViaSiliconFlow(imageBase64, opts = {}) {
   // Vision model ids drift too, so walk the verified list rather than 404 on one.
   let answer = null;
   let lastError = null;
+  // Bounded across the whole list: without a deadline, letting a slow model fall
+  // through could stack three 20 s waits into a minute of silence.
+  const deadline = started + (opts.deadlineMs ?? TIMEOUTS.vlmDeadlineMs);
   for (const model of candidates) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
     try {
-      answer = await ask(model, opts.timeoutMs ?? TIMEOUTS.vlmMs);
+      answer = await ask(model, Math.min(opts.timeoutMs ?? TIMEOUTS.vlmMs, remaining));
       break;
     } catch (error) {
       lastError = error;
-      const tryNext = error instanceof ApiError && (error.status === 400 || error.status === 404);
-      if (!tryNext) throw error;
+      if (!shouldTryNextModel(error)) throw error;
     }
   }
 
@@ -232,7 +237,10 @@ export async function describeViaSiliconFlow(imageBase64, opts = {}) {
   const deep = MODELS.vlmDeep;
   if (opts.escalate && deep && deep !== answer.model && looksDoubtful(answer, opts)) {
     try {
-      const deeper = await ask(deep, opts.deepTimeoutMs ?? TIMEOUTS.vlmDeepMs);
+      const deepBudget = Math.min(opts.deepTimeoutMs ?? TIMEOUTS.vlmDeepMs,
+                                  Math.max(deadline - Date.now(), 0));
+      if (deepBudget <= 0) throw new ApiError('no time left to escalate', { code: 'timeout' });
+      const deeper = await ask(deep, deepBudget);
       if (!looksDoubtful(deeper, opts)) return deeper;
     } catch {
       // Keep the fast answer; a slow model that failed is not a reason to say nothing.
